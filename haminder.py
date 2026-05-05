@@ -1,3 +1,5 @@
+import os
+import sys
 import rumps
 import requests
 import threading
@@ -8,11 +10,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 rumps.debug_mode(False)
 
-HA_HOST = 'https://mnmhome.local:8123'
-HA_AUTH = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhN2ExMjk2ZjNkNDI0YTg5ODNhMDg0ZDYxNmNiYzM0MiIsImlhdCI6MTc3NzYwODk2NCwiZXhwIjoyMDkyOTY4OTY0fQ.pbUi4E3FKAot26C4P9hCdC6yzzeA7dN9LfoL_kdCLCs'
-PAYLOAD = '{"entity_id": "light.tp_link_smart_bulb_1bb7"}'
+HA_HOST = os.environ.get('HA_HOST')
+HA_AUTH = os.environ.get('HA_AUTH')
+HA_ENTITY = os.environ.get('HA_ENTITY', 'light.tp_link_smart_bulb_1bb7')
+
+_missing = [v for v in ('HA_HOST', 'HA_AUTH') if not os.environ.get(v)]
+if _missing:
+    sys.exit(f"ERROR: required environment variable(s) not set: {', '.join(_missing)}")
+
+PAYLOAD = f'{{"entity_id": "{HA_ENTITY}"}}'
 URL_OFF = f'{HA_HOST}/api/services/light/turn_off'
-URL_ON = f'{HA_HOST}/api/services/light/turn_on'
+URL_ON  = f'{HA_HOST}/api/services/light/turn_on'
 
 
 class HAMinderApp:
