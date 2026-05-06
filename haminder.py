@@ -26,13 +26,11 @@ URL_ON  = f'{HA_HOST}/api/services/light/turn_on'
 class HAMinderApp:
     def __init__(self):
         self.app = rumps.App("HA-Minder", "☾", quit_button=None)
-        
-        # Use requests.Session for connection pooling and default headers
-        self.session = requests.Session()
-        self.session.headers.update({
+
+        self._headers = {
             'Authorization': f'Bearer {HA_AUTH}',
             'Content-Type': 'application/json'
-        })
+        }
 
         # Callbacks can reference the methods directly instead of using lambdas
         self.start_pause_button = rumps.MenuItem(title='Light On',
@@ -74,7 +72,7 @@ class HAMinderApp:
     def toggle_indicator(self, mode=False):
         url = URL_ON if mode else URL_OFF
         try:
-            response = self.session.post(url, data=PAYLOAD, verify=False)
+            response = requests.post(url, data=PAYLOAD, headers=self._headers, verify=False)
             response.raise_for_status()
             print(f"Success: {response.text}")
         except requests.exceptions.RequestException as e:
