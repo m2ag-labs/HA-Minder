@@ -1,2 +1,4 @@
-rumps
+pystray
 requests
+Pillow
+python-dotenv
