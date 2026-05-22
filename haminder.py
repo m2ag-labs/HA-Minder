@@ -2,6 +2,7 @@ import os
 import sys
 import math
 import threading
+import subprocess
 import requests
 import urllib3
 from PIL import Image, ImageDraw
@@ -14,8 +15,84 @@ try:
 except ImportError:
     pass
 
+
+def _parse_env_file(filepath: str) -> dict[str, str]:
+    """Parse a .env or env.sh file and return a dict of key-value pairs."""
+    env_vars = {}
+    if not os.path.isfile(filepath):
+        return env_vars
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('export '):
+                    line = line[7:].strip()
+                if '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                key = key.strip()
+                val = val.strip()
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1]
+                env_vars[key] = val
+    except Exception as e:
+        print(f"Error reading env file {filepath}: {e}")
+    return env_vars
+
+
+def _load_robust_config() -> None:
+    """Search for config files in various directories and load them into os.environ."""
+    dirs_to_check = []
+    
+    # 1. Current working directory
+    try:
+        dirs_to_check.append(os.getcwd())
+    except Exception:
+        pass
+        
+    # 2. User's home directory
+    home = os.path.expanduser('~')
+    dirs_to_check.append(home)
+    dirs_to_check.append(os.path.join(home, '.config', 'haminder'))
+    
+    # 3. Directory of the current script / executable and its parent directories up to root
+    try:
+        entry_file = __file__ if '__file__' in globals() else sys.argv[0]
+        target = os.path.abspath(entry_file)
+        curr = os.path.dirname(target)
+        while curr and curr != os.path.dirname(curr):
+            dirs_to_check.append(curr)
+            curr = os.path.dirname(curr)
+        if curr:
+            dirs_to_check.append(curr)
+    except Exception:
+        pass
+
+    # Unique list while preserving order
+    seen = set()
+    unique_dirs = []
+    for d in dirs_to_check:
+        if d and d not in seen:
+            seen.add(d)
+            unique_dirs.append(d)
+
+    # Load from the first .env / env.sh files we find (or any of them to populate missing values)
+    for d in unique_dirs:
+        for filename in ('.env', 'env.sh'):
+            filepath = os.path.join(d, filename)
+            if os.path.isfile(filepath):
+                for k, v in _parse_env_file(filepath).items():
+                    if not os.environ.get(k):
+                        os.environ[k] = v
+
+
 # Suppress insecure request warnings since verify=False is used
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Robustly load config
+_load_robust_config()
 
 HA_HOST   = os.environ.get('HA_HOST')
 HA_AUTH   = os.environ.get('HA_AUTH')
@@ -23,7 +100,23 @@ HA_ENTITY = os.environ.get('HA_ENTITY', 'light.tp_link_smart_bulb_1bb7')
 
 _missing = [v for v in ('HA_HOST', 'HA_AUTH') if not os.environ.get(v)]
 if _missing:
-    sys.exit(f"ERROR: required environment variable(s) not set: {', '.join(_missing)}")
+    msg = (
+        f"Required environment variable(s) not set: {', '.join(_missing)}.\n\n"
+        "Please create a '.env' or 'env.sh' file with your HA_HOST and HA_AUTH "
+        "and place it in your home directory (~/.env or ~/.haminder.env), in ~/.config/haminder/env, "
+        "or in the repository root."
+    )
+    print(f"ERROR: {msg}", file=sys.stderr)
+    try:
+        # Escaping title and message for AppleScript
+        escaped_title = "HA-Minder Configuration Error".replace('"', '\\"')
+        escaped_msg = msg.replace('"', '\\"')
+        script = f'display alert "{escaped_title}" message "{escaped_msg}" as critical buttons {{"OK"}} default button "OK"'
+        subprocess.run(["osascript", "-e", script], capture_output=True)
+    except Exception:
+        pass
+    sys.exit(1)
+
 
 PAYLOAD = f'{{"entity_id": "{HA_ENTITY}"}}'
 URL_ON  = f'{HA_HOST}/api/services/light/turn_on'

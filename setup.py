@@ -24,7 +24,7 @@ OPTIONS = {
         'LSUIElement': True,
         'NSHighResolutionCapable': True,
     },
-    'packages': ['rumps', 'requests', 'urllib3'],
+    'packages': ['pystray', 'PIL', 'requests', 'urllib3'],
 }
 
 setup(
