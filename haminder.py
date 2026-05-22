@@ -15,6 +15,14 @@ try:
 except ImportError:
     pass
 
+try:
+    import objc
+    from AppKit import NSWorkspace
+    from Foundation import NSObject
+    HAS_COCOA = True
+except ImportError:
+    HAS_COCOA = False
+
 
 def _parse_env_file(filepath: str) -> dict[str, str]:
     """Parse a .env or env.sh file and return a dict of key-value pairs."""
@@ -160,6 +168,47 @@ def _make_icon(lit: bool) -> Image.Image:
     return img
 
 
+if HAS_COCOA:
+    class SleepWakeObserver(NSObject):
+        def initWithApp_(self, app):
+            self = objc.super(SleepWakeObserver, self).init()
+            if self:
+                self._app = app
+                self._was_on_before_sleep = False
+                
+                nc = NSWorkspace.sharedWorkspace().notificationCenter()
+                nc.addObserver_selector_name_object_(
+                    self,
+                    "receiveSleepNotification:",
+                    "NSWorkspaceWillSleepNotification",
+                    None
+                )
+                nc.addObserver_selector_name_object_(
+                    self,
+                    "receiveWakeNotification:",
+                    "NSWorkspaceDidWakeNotification",
+                    None
+                )
+            return self
+
+        def receiveSleepNotification_(self, notification):
+            with self._app._lock:
+                was_on = self._app._light_on
+            
+            if was_on:
+                self._was_on_before_sleep = True
+                self._app._set_state(False)
+                # Synchronously turn off the light so the request completes before sleep
+                self._app.toggle_indicator(False)
+            else:
+                self._was_on_before_sleep = False
+
+        def receiveWakeNotification_(self, notification):
+            if self._was_on_before_sleep:
+                self._app.start_minder()
+                self._was_on_before_sleep = False
+
+
 class HAMinderApp:
     def __init__(self):
         self._light_on = False
@@ -191,6 +240,11 @@ class HAMinderApp:
             title='HA-Minder',
             menu=menu,
         )
+
+        if HAS_COCOA:
+            self._observer = SleepWakeObserver.alloc().initWithApp_(self)
+        else:
+            self._observer = None
 
     # ------------------------------------------------------------------
     # UI state helpers
