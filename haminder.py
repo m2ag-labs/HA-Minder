@@ -203,26 +203,28 @@ def _draw_propeller(
 
 def _draw_beach_scene(sway_angle_rad: float) -> Image.Image:
     """
-    Draw a colorful, full 64x64 RGBA beach scene containing:
+    Draw a colorful, full 64x64 RGBA beach scene cropped inside a
+    circular spyglass frame (with dark metallic outer barrel ring):
       - Sky-blue background with a glowing orange sun
       - Turquoise ocean
       - Golden sand island dune
       - Centered palm tree with curved trunk and palm leaves swaying dynamically
     """
     size = _ICON_SIZE
-    img = Image.new('RGBA', (size, size), (135, 206, 235, 255))  # Sky blue background
-    draw = ImageDraw.Draw(img)
+    # 1. First draw the raw beach scene on a temporary base image
+    beach_base = Image.new('RGBA', (size, size), (135, 206, 235, 255))  # Sky blue background
+    draw_beach = ImageDraw.Draw(beach_base)
     
-    # 1. Sunset/Orange Sun (x=12, y=12, radius=7)
-    draw.ellipse([5, 5, 19, 19], fill=(255, 120, 0, 255))
+    # Sunset/Orange Sun (x=12, y=12, radius=7)
+    draw_beach.ellipse([5, 5, 19, 19], fill=(255, 120, 0, 255))
     
-    # 2. Turquoise/Cyan Ocean (y=36 to y=52)
-    draw.rectangle([0, 36, 64, 52], fill=(32, 178, 170, 255))
+    # Turquoise/Cyan Ocean (y=36 to y=52)
+    draw_beach.rectangle([0, 36, 64, 52], fill=(32, 178, 170, 255))
     
-    # 3. Golden Sand Island (drawn at bottom)
-    draw.ellipse([-10, 48, 74, 75], fill=(238, 214, 175, 255))
+    # Golden Sand Island (drawn at bottom)
+    draw_beach.ellipse([-10, 48, 74, 75], fill=(238, 214, 175, 255))
     
-    # 4. Swaying Palm Tree (Trunk base at (40, 52), height ~24 pixels)
+    # Swaying Palm Tree (Trunk base at (40, 52), height ~24 pixels)
     sway_offset = 6 * math.sin(sway_angle_rad)
     trunk_top_x = 40 + sway_offset
     trunk_top_y = 28
@@ -234,9 +236,9 @@ def _draw_beach_scene(sway_angle_rad: float) -> Image.Image:
         bx = (1 - t)**2 * 40 + 2 * (1 - t) * t * (43 + sway_offset/2) + t**2 * trunk_top_x
         by = (1 - t)**2 * 52 + 2 * (1 - t) * t * 40 + t**2 * trunk_top_y
         r_trunk = 2.2 - 0.7 * t  # trunk tapers at top
-        draw.ellipse([bx - r_trunk, by - r_trunk, bx + r_trunk, by + r_trunk], fill=(120, 75, 45, 255))
+        draw_beach.ellipse([bx - r_trunk, by - r_trunk, bx + r_trunk, by + r_trunk], fill=(120, 75, 45, 255))
         
-    # 5. Swaying Palm Leaves (curving outward from trunk top)
+    # Swaying Palm Leaves (curving outward from trunk top)
     leaf_color = (34, 139, 34, 255)
     leaf_angles = [-160, -120, -80, -40, 0]
     for angle_deg in leaf_angles:
@@ -248,9 +250,25 @@ def _draw_beach_scene(sway_angle_rad: float) -> Image.Image:
             lx = trunk_top_x + 12 * lt * math.cos(rad)
             ly = trunk_top_y + 12 * lt * math.sin(rad) + 4 * lt**2
             r_leaf = 1.8 * (1 - 0.7 * lt)
-            draw.ellipse([lx - r_leaf, ly - r_leaf, lx + r_leaf, ly + r_leaf], fill=leaf_color)
+            draw_beach.ellipse([lx - r_leaf, ly - r_leaf, lx + r_leaf, ly + r_leaf], fill=leaf_color)
             
-    return img
+    # 2. Now apply the circular spyglass crop and metallic border
+    spy_img = Image.new('RGBA', (size, size), (0, 0, 0, 0))  # Transparent background
+    
+    # Create an anti-aliased circular mask of diameter 60 (from x=2 to x=61)
+    mask_circle = Image.new('L', (size, size), 0)
+    draw_mask = ImageDraw.Draw(mask_circle)
+    draw_mask.ellipse([2, 2, 61, 61], fill=255)
+    
+    # Paste the beach scene using the circular mask
+    spy_img.paste(beach_base, (0, 0), mask=mask_circle)
+    
+    # Draw a thin dark-steel metallic outer barrel ring
+    draw_spy = ImageDraw.Draw(spy_img)
+    draw_spy.ellipse([2, 2, 61, 61], outline=(45, 45, 55, 255), width=2)
+    
+    return spy_img
+
 
 
 
