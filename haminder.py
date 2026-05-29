@@ -3,6 +3,7 @@ import sys
 import math
 import threading
 import subprocess
+import time
 import requests
 import urllib3
 from PIL import Image, ImageDraw, ImageFont
@@ -166,36 +167,35 @@ def _make_icon(lit: bool) -> Image.Image:
     return img
 
 
-def _make_emoji_icon(emoji: str, size: int = 64) -> Image.Image:
+def _draw_propeller(angle_deg: float) -> Image.Image:
     """
-    Generate a transparent RGBA icon with a centered emoji
-    using the Apple Color Emoji font.
+    Generate a transparent 64x64 RGBA canvas with a centered,
+    rotated 2-blade propeller and central hub.
     """
-    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    size = _ICON_SIZE
+    prop_img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(prop_img)
     
-    font_path = "/System/Library/Fonts/Apple Color Emoji.ttc"
+    cx = cy = size / 2  # 32
+    r_hub = 3.5
+    L = 16  # blade length from center
+    w = 3.5  # blade half-width
+    
+    # Left blade (rounded ellipse capsule)
+    draw.ellipse([cx - L, cy - w, cx - r_hub, cy + w], fill=(225, 225, 230, 255))
+    # Right blade
+    draw.ellipse([cx + r_hub, cy - w, cx + L, cy + w], fill=(225, 225, 230, 255))
+    # Central hub circle
+    draw.ellipse([cx - r_hub, cy - r_hub, cx + r_hub, cy + r_hub], fill=(130, 130, 135, 255))
+    
     try:
-        font = ImageFont.truetype(font_path, int(size * 0.75))
-    except Exception:
-        font = ImageFont.load_default()
-        
-    try:
-        bbox = draw.textbbox((0, 0), emoji, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
+        resample = Image.Resampling.BICUBIC
     except AttributeError:
-        w, h = draw.textsize(emoji, font=font)
+        resample = Image.BICUBIC
         
-    x = (size - w) / 2
-    y = (size - h) / 2 - 2
-    
-    try:
-        draw.text((x, y), emoji, font=font, embedded_color=True)
-    except TypeError:
-        draw.text((x, y), emoji, font=font)
-        
-    return img
+    rotated = prop_img.rotate(-angle_deg, resample=resample)
+    return rotated
+
 
 
 
@@ -259,7 +259,9 @@ class HAMinderApp:
     def __init__(self):
         self._light_on = False
         self._fan_on   = False
+        self._propeller_angle = 0.0
         self._lock     = threading.Lock()
+
 
         self._headers = {
             'Authorization': f'Bearer {HA_AUTH}',
@@ -310,28 +312,15 @@ class HAMinderApp:
     def _make_combined_icon(self) -> Image.Image:
         """
         Generate a perfectly square 64×64 RGBA tray icon containing:
-          - Left half (32x32, vertically centered): Moon/Sun status (Light)
-          - Right half (32x32, vertically centered): Red folding fan/Cyclone emoji (Fan)
-        This prevents macOS status bar button distortion.
+          - Full-size Moon/Sun status (Light)
+          - Centered, superimposed 2-blade propeller at the current rotation angle (Fan)
+        This ensures the icons are the largest size allowable.
         """
-        size = _ICON_SIZE
-        bg = (30, 30, 46, 255)  # dark navy background
-        img = Image.new('RGBA', (size, size), bg)
-        
-        # Left half: Light (Resize 64x64 original to 32x32 and center vertically)
-        light_orig = _make_icon(self._light_on)
-        try:
-            resampling = Image.Resampling.LANCZOS
-        except AttributeError:
-            resampling = Image.ANTIALIAS
-        light_img = light_orig.resize((32, 32), resampling)
-        img.paste(light_img, (0, 16))
-        
-        # Right half: Fan (Generate 32x32 emoji icon and center vertically)
-        fan_img = _make_emoji_icon('🌀' if self._fan_on else '🪭', size=32)
-        img.paste(fan_img, (32, 16), mask=fan_img)
-        
-        return img
+        base_img = _make_icon(self._light_on)
+        prop_img = _draw_propeller(self._propeller_angle)
+        base_img.paste(prop_img, (0, 0), mask=prop_img)
+        return base_img
+
 
 
     def _update_ui(self) -> None:
@@ -368,8 +357,26 @@ class HAMinderApp:
             target=self.toggle_indicator, args=(False,), daemon=True
         ).start()
 
+    def _animate_fan(self) -> None:
+        """Increment propeller angle and update icon dynamically while the fan is ON."""
+        while True:
+            with self._lock:
+                if not self._fan_on:
+                    # Snap back to horizontal rest position
+                    self._propeller_angle = 0.0
+                    break
+                # 20 degrees per 100ms creates a smooth, energetic spin
+                self._propeller_angle = (self._propeller_angle + 20) % 360
+            
+            self.icon.icon = self._make_combined_icon()
+            time.sleep(0.1)
+        
+        # Ensure we redraw the icon in its static horizontal rest state
+        self.icon.icon = self._make_combined_icon()
+
     def turn_fan_on(self, icon=None, item=None) -> None:
         self._set_fan_state(True)
+        threading.Thread(target=self._animate_fan, daemon=True).start()
         threading.Thread(
             target=self.toggle_device, args=(HA_FAN_ENTITY, True), daemon=True
         ).start()
@@ -382,9 +389,11 @@ class HAMinderApp:
 
     def quit_app(self, icon=None, item=None) -> None:
         """Turn light and fan off synchronously, then stop the tray icon."""
+        self._set_fan_state(False)
         self.toggle_indicator(False)
         self.toggle_device(HA_FAN_ENTITY, False)
         self.icon.stop()
+
 
 
 
