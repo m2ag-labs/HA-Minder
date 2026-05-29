@@ -166,18 +166,17 @@ def _make_icon(lit: bool) -> Image.Image:
     return img
 
 
-def _make_emoji_icon(emoji: str) -> Image.Image:
+def _make_emoji_icon(emoji: str, size: int = 64) -> Image.Image:
     """
-    Generate a transparent 64x64 RGBA icon with a centered emoji
+    Generate a transparent RGBA icon with a centered emoji
     using the Apple Color Emoji font.
     """
-    size = _ICON_SIZE
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     
     font_path = "/System/Library/Fonts/Apple Color Emoji.ttc"
     try:
-        font = ImageFont.truetype(font_path, 40)
+        font = ImageFont.truetype(font_path, int(size * 0.75))
     except Exception:
         font = ImageFont.load_default()
         
@@ -189,7 +188,7 @@ def _make_emoji_icon(emoji: str) -> Image.Image:
         w, h = draw.textsize(emoji, font=font)
         
     x = (size - w) / 2
-    y = (size - h) / 2 - 4
+    y = (size - h) / 2 - 2
     
     try:
         draw.text((x, y), emoji, font=font, embedded_color=True)
@@ -197,6 +196,7 @@ def _make_emoji_icon(emoji: str) -> Image.Image:
         draw.text((x, y), emoji, font=font)
         
     return img
+
 
 
 
@@ -309,24 +309,30 @@ class HAMinderApp:
 
     def _make_combined_icon(self) -> Image.Image:
         """
-        Generate a double-width 128×64 RGBA tray icon containing:
-          - Left half: Moon/Sun status (Light)
-          - Right half: Red folding fan/Cyclone emoji (Fan)
+        Generate a perfectly square 64×64 RGBA tray icon containing:
+          - Left half (32x32, vertically centered): Moon/Sun status (Light)
+          - Right half (32x32, vertically centered): Red folding fan/Cyclone emoji (Fan)
+        This prevents macOS status bar button distortion.
         """
-        width = 128
-        height = 64
+        size = _ICON_SIZE
         bg = (30, 30, 46, 255)  # dark navy background
-        img = Image.new('RGBA', (width, height), bg)
+        img = Image.new('RGBA', (size, size), bg)
         
-        # Left half: Light
-        light_img = _make_icon(self._light_on)
-        img.paste(light_img, (0, 0))
+        # Left half: Light (Resize 64x64 original to 32x32 and center vertically)
+        light_orig = _make_icon(self._light_on)
+        try:
+            resampling = Image.Resampling.LANCZOS
+        except AttributeError:
+            resampling = Image.ANTIALIAS
+        light_img = light_orig.resize((32, 32), resampling)
+        img.paste(light_img, (0, 16))
         
-        # Right half: Fan
-        fan_img = _make_emoji_icon('🌀' if self._fan_on else '🪭')
-        img.paste(fan_img, (64, 0), mask=fan_img)
+        # Right half: Fan (Generate 32x32 emoji icon and center vertically)
+        fan_img = _make_emoji_icon('🌀' if self._fan_on else '🪭', size=32)
+        img.paste(fan_img, (32, 16), mask=fan_img)
         
         return img
+
 
     def _update_ui(self) -> None:
         """Re-draw the combined icon and refresh the menu bar status."""
