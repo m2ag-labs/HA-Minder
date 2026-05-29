@@ -622,25 +622,58 @@ class HAMinderApp:
     def toggle_indicator(self, mode: bool = False) -> None:
         self.toggle_device(HA_LIGHT_ENTITY, mode)
 
+    def query_device_state(self, entity_id: str) -> bool:
+        """Query Home Assistant for the active state of an entity."""
+        url = f"{HA_HOST}/api/states/{entity_id}"
+        try:
+            response = requests.get(url, headers=self._headers, verify=False)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('state') == 'on'
+        except Exception as e:
+            print(f"Error querying state for {entity_id}: {e}")
+            return False
+
+    def initialize_device_states(self) -> None:
+        """Query initial device states and refresh UI atomically."""
+        light_active = self.query_device_state(HA_LIGHT_ENTITY)
+        fan_active = self.query_device_state(HA_FAN_ENTITY)
+        
+        with self._lock:
+            # If we started on battery (Away), we preserve the away beach scene
+            # but save the retrieved active states so they restore on plug-in.
+            if self._away:
+                self._was_light_on_before_away = light_active
+                self._was_fan_on_before_away = fan_active
+                return
+                
+            self._light_on = light_active
+            self._fan_on = fan_active
+            
+        # If the fan is active, start the animation thread!
+        if fan_active:
+            threading.Thread(target=self._animate_fan, daemon=True).start()
+            
+        # Refresh the icon to reflect the true starting states
+        self._update_ui()
+
+
 
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        # Ensure light and fan start off, then hand control to the tray event loop
-        threading.Thread(
-            target=self.toggle_indicator, args=(False,), daemon=True
-        ).start()
-        threading.Thread(
-            target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
-        ).start()
-        
-        # Start the background battery polling thread
+        # Start the background battery polling thread first
+        # (Allows instant 'Away' battery detection at launch)
         threading.Thread(target=self._poll_battery, daemon=True).start()
+        
+        # Asynchronously query current HA states and initialize UI
+        threading.Thread(target=self.initialize_device_states, daemon=True).start()
         
         # Primary combined icon occupies the main Cocoa event loop
         self.icon.run()
+
 
 
 
