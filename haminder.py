@@ -266,7 +266,7 @@ class HAMinderApp:
             'Content-Type':  'application/json',
         }
 
-        light_menu = pystray.Menu(
+        menu = pystray.Menu(
             pystray.MenuItem(
                 'Light On',
                 self.start_minder,
@@ -278,17 +278,6 @@ class HAMinderApp:
                 enabled=lambda item: self._light_on,
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Quit', self.quit_app),
-        )
-
-        self.icon = pystray.Icon(
-            name='HA-Minder-Light',
-            icon=_make_icon(False),
-            title='HA-Minder Light',
-            menu=light_menu,
-        )
-
-        fan_menu = pystray.Menu(
             pystray.MenuItem(
                 'Fan On',
                 self.turn_fan_on,
@@ -303,34 +292,59 @@ class HAMinderApp:
             pystray.MenuItem('Quit', self.quit_app),
         )
 
-        self.fan_icon = pystray.Icon(
-            name='HA-Minder-Fan',
-            icon=_make_emoji_icon('🪭'),
-            title='HA-Minder Fan',
-            menu=fan_menu,
+        self.icon = pystray.Icon(
+            name='HA-Minder',
+            icon=self._make_combined_icon(),
+            title='HA-Minder',
+            menu=menu,
         )
 
         self._observer = SleepWakeObserver.alloc().initWithApp_(self)
+
 
 
     # ------------------------------------------------------------------
     # UI state helpers
     # ------------------------------------------------------------------
 
-    def _set_state(self, lit: bool) -> None:
-        """Update icon image and menu enabled-states atomically."""
-        with self._lock:
-            self._light_on = lit
-        self.icon.icon = _make_icon(lit)
+    def _make_combined_icon(self) -> Image.Image:
+        """
+        Generate a double-width 128×64 RGBA tray icon containing:
+          - Left half: Moon/Sun status (Light)
+          - Right half: Red folding fan/Cyclone emoji (Fan)
+        """
+        width = 128
+        height = 64
+        bg = (30, 30, 46, 255)  # dark navy background
+        img = Image.new('RGBA', (width, height), bg)
+        
+        # Left half: Light
+        light_img = _make_icon(self._light_on)
+        img.paste(light_img, (0, 0))
+        
+        # Right half: Fan
+        fan_img = _make_emoji_icon('🌀' if self._fan_on else '🪭')
+        img.paste(fan_img, (64, 0), mask=fan_img)
+        
+        return img
+
+    def _update_ui(self) -> None:
+        """Re-draw the combined icon and refresh the menu bar status."""
+        self.icon.icon = self._make_combined_icon()
         self.icon.update_menu()
 
+    def _set_state(self, lit: bool) -> None:
+        """Update light state and refresh the combined menu bar UI."""
+        with self._lock:
+            self._light_on = lit
+        self._update_ui()
+
     def _set_fan_state(self, on: bool) -> None:
-        """Update fan icon emoji and menu enabled-states atomically."""
+        """Update fan state and refresh the combined menu bar UI."""
         with self._lock:
             self._fan_on = on
-        emoji = '🌀' if on else '🪭'
-        self.fan_icon.icon = _make_emoji_icon(emoji)
-        self.fan_icon.update_menu()
+        self._update_ui()
+
 
     # ------------------------------------------------------------------
     # Menu callbacks
@@ -361,11 +375,11 @@ class HAMinderApp:
         ).start()
 
     def quit_app(self, icon=None, item=None) -> None:
-        """Turn light and fan off synchronously, then stop both tray icons."""
+        """Turn light and fan off synchronously, then stop the tray icon."""
         self.toggle_indicator(False)
         self.toggle_device(HA_FAN_ENTITY, False)
         self.icon.stop()
-        self.fan_icon.stop()
+
 
 
 
@@ -404,9 +418,7 @@ class HAMinderApp:
             target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
         ).start()
         
-        # Start the fan icon on a background thread
-        threading.Thread(target=self.fan_icon.run, daemon=True).start()
-        # Primary light icon occupies the main Cocoa event loop
+        # Primary combined icon occupies the main Cocoa event loop
         self.icon.run()
 
 
