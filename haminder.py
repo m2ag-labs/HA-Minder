@@ -10,6 +10,7 @@ import pystray
 
 # Optional .env file support — no error if python-dotenv isn't installed
 try:
+    # pyrefly: ignore [missing-import]
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
@@ -100,7 +101,9 @@ _load_robust_config()
 
 HA_HOST   = os.environ.get('HA_HOST')
 HA_AUTH   = os.environ.get('HA_AUTH')
-HA_ENTITY = os.environ.get('HA_ENTITY', 'light.tp_link_smart_bulb_1bb7')
+HA_LIGHT_ENTITY = os.environ.get('HA_LIGHT_ENTITY', os.environ.get('HA_ENTITY', 'light.tp_link_smart_bulb_1bb7'))
+HA_FAN_ENTITY   = os.environ.get('HA_FAN_ENTITY', 'switch.marc_office_fan')
+
 
 _missing = [v for v in ('HA_HOST', 'HA_AUTH') if not os.environ.get(v)]
 if _missing:
@@ -122,9 +125,7 @@ if _missing:
     sys.exit(1)
 
 
-PAYLOAD = f'{{"entity_id": "{HA_ENTITY}"}}'
-URL_ON  = f'{HA_HOST}/api/services/light/turn_on'
-URL_OFF = f'{HA_HOST}/api/services/light/turn_off'
+HA_ENTITY = HA_LIGHT_ENTITY
 
 _ICON_SIZE = 64
 
@@ -207,6 +208,7 @@ class SleepWakeObserver(NSObject):
 class HAMinderApp:
     def __init__(self):
         self._light_on = False
+        self._fan_on   = False
         self._lock     = threading.Lock()
 
         self._headers = {
@@ -226,8 +228,20 @@ class HAMinderApp:
                 enabled=lambda item: self._light_on,
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                'Fan On',
+                self.turn_fan_on,
+                enabled=lambda item: not self._fan_on,
+            ),
+            pystray.MenuItem(
+                'Fan Off',
+                self.turn_fan_off,
+                enabled=lambda item: self._fan_on,
+            ),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem('Quit', self.quit_app),
         )
+
 
         self.icon = pystray.Icon(
             name='HA-Minder',
@@ -265,25 +279,49 @@ class HAMinderApp:
             target=self.toggle_indicator, args=(False,), daemon=True
         ).start()
 
+    def turn_fan_on(self, icon=None, item=None) -> None:
+        with self._lock:
+            self._fan_on = True
+        self.icon.update_menu()
+        threading.Thread(
+            target=self.toggle_device, args=(HA_FAN_ENTITY, True), daemon=True
+        ).start()
+
+    def turn_fan_off(self, icon=None, item=None) -> None:
+        with self._lock:
+            self._fan_on = False
+        self.icon.update_menu()
+        threading.Thread(
+            target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
+        ).start()
+
     def quit_app(self, icon=None, item=None) -> None:
         """Turn light off synchronously, then stop the tray icon."""
         self.toggle_indicator(False)
         self.icon.stop()
 
+
     # ------------------------------------------------------------------
     # HA API
     # ------------------------------------------------------------------
 
-    def toggle_indicator(self, mode: bool = False) -> None:
-        url = URL_ON if mode else URL_OFF
+    def toggle_device(self, entity_id: str, mode: bool) -> None:
+        domain = entity_id.split('.')[0] if '.' in entity_id else 'homeassistant'
+        service = 'turn_on' if mode else 'turn_off'
+        url = f"{HA_HOST}/api/services/{domain}/{service}"
+        payload = f'{{"entity_id": "{entity_id}"}}'
         try:
             response = requests.post(
-                url, data=PAYLOAD, headers=self._headers, verify=False
+                url, data=payload, headers=self._headers, verify=False
             )
             response.raise_for_status()
-            print(f"Success: {response.text}")
+            print(f"Successfully toggled {entity_id} {'ON' if mode else 'OFF'}")
         except requests.exceptions.RequestException as e:
-            print(f"Error toggling light: {e}")
+            print(f"Error toggling {entity_id}: {e}")
+
+    def toggle_indicator(self, mode: bool = False) -> None:
+        self.toggle_device(HA_LIGHT_ENTITY, mode)
+
 
     # ------------------------------------------------------------------
     # Entry point
