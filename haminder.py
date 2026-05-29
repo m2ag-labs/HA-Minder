@@ -167,7 +167,11 @@ def _make_icon(lit: bool) -> Image.Image:
     return img
 
 
-def _draw_propeller(angle_deg: float) -> Image.Image:
+def _draw_propeller(
+    angle_deg: float,
+    blade_color: tuple[int, int, int, int] = (225, 225, 230, 255),
+    hub_color: tuple[int, int, int, int] = (130, 130, 135, 255)
+) -> Image.Image:
     """
     Generate a transparent 64x64 RGBA canvas with a centered,
     rotated 2-blade propeller and central hub.
@@ -182,11 +186,11 @@ def _draw_propeller(angle_deg: float) -> Image.Image:
     w = 3.5  # blade half-width
     
     # Left blade (rounded ellipse capsule)
-    draw.ellipse([cx - L, cy - w, cx - r_hub, cy + w], fill=(225, 225, 230, 255))
+    draw.ellipse([cx - L, cy - w, cx - r_hub, cy + w], fill=blade_color)
     # Right blade
-    draw.ellipse([cx + r_hub, cy - w, cx + L, cy + w], fill=(225, 225, 230, 255))
+    draw.ellipse([cx + r_hub, cy - w, cx + L, cy + w], fill=blade_color)
     # Central hub circle
-    draw.ellipse([cx - r_hub, cy - r_hub, cx + r_hub, cy + r_hub], fill=(130, 130, 135, 255))
+    draw.ellipse([cx - r_hub, cy - r_hub, cx + r_hub, cy + r_hub], fill=hub_color)
     
     try:
         resample = Image.Resampling.BICUBIC
@@ -195,6 +199,7 @@ def _draw_propeller(angle_deg: float) -> Image.Image:
         
     rotated = prop_img.rotate(-angle_deg, resample=resample)
     return rotated
+
 
 
 
@@ -317,9 +322,21 @@ class HAMinderApp:
         This ensures the icons are the largest size allowable.
         """
         base_img = _make_icon(self._light_on)
-        prop_img = _draw_propeller(self._propeller_angle)
+        
+        # Select high-contrast colors dynamically based on Light state
+        if self._light_on:
+            # Golden Sun background -> Deep Navy/Dark Blue propeller
+            blade_color = (20, 35, 90, 255)
+            hub_color = (10, 20, 50, 255)
+        else:
+            # Dark Navy Moon background -> Silver White propeller
+            blade_color = (225, 225, 230, 255)
+            hub_color = (130, 130, 135, 255)
+            
+        prop_img = _draw_propeller(self._propeller_angle, blade_color, hub_color)
         base_img.paste(prop_img, (0, 0), mask=prop_img)
         return base_img
+
 
 
 
