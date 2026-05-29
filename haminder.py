@@ -6,7 +6,7 @@ import subprocess
 import time
 import requests
 import urllib3
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageChops
 
 import pystray
 
@@ -182,7 +182,7 @@ def _draw_propeller(
     
     cx = cy = size / 2  # 32
     r_hub = 3.5
-    L = 16  # blade length from center
+    L = 30  # blade length from center (max width)
     w = 3.5  # blade half-width
     
     # Left blade (rounded ellipse capsule)
@@ -264,8 +264,9 @@ class HAMinderApp:
     def __init__(self):
         self._light_on = False
         self._fan_on   = False
-        self._propeller_angle = 0.0
+        self._propeller_angle = 45.0
         self._lock     = threading.Lock()
+
 
 
         self._headers = {
@@ -323,19 +324,44 @@ class HAMinderApp:
         """
         base_img = _make_icon(self._light_on)
         
-        # Select high-contrast colors dynamically based on Light state
         if self._light_on:
-            # Golden Sun background -> Deep Navy/Dark Blue propeller
-            blade_color = (20, 35, 90, 255)
-            hub_color = (10, 20, 50, 255)
+            # We want: 
+            # - Outer/default color (extends outside Sun): white (255, 255, 255, 255)
+            # - Inner color (inside the Sun): dark blue (20, 35, 90, 255)
+            
+            # 1. Generate the base propeller in white
+            prop_outer = _draw_propeller(self._propeller_angle, (255, 255, 255, 255), (255, 255, 255, 255))
+            
+            # 2. Create a mask representing the Sun circle (grows from 10 to 54)
+            mask_inner = Image.new('L', (64, 64), 0)
+            draw_mask = ImageDraw.Draw(mask_inner)
+            draw_mask.ellipse([10, 10, 54, 54], fill=255)
+            
+            # 3. Intersect propeller transparency with the Sun circle mask
+            prop_alpha = prop_outer.split()[3]
+            composite_mask = ImageChops.multiply(prop_alpha, mask_inner)
+            
+            # 4. Paste dark blue onto the white propeller only inside the Sun bounds
+            dark_blue_img = Image.new('RGBA', (64, 64), (20, 35, 90, 255))
+            prop_outer.paste(dark_blue_img, (0, 0), mask=composite_mask)
+            
+            # 5. Redraw the central hub with a matching slate/dark hub color
+            hub_mask = Image.new('L', (64, 64), 0)
+            draw_hub = ImageDraw.Draw(hub_mask)
+            draw_hub.ellipse([28, 28, 36, 36], fill=255)
+            hub_color_img = Image.new('RGBA', (64, 64), (10, 20, 50, 255))
+            prop_outer.paste(hub_color_img, (0, 0), mask=hub_mask)
+            
+            prop_img = prop_outer
         else:
-            # Dark Navy Moon background -> Silver White propeller
+            # Dark Navy Moon background -> Silver White propeller (max width)
             blade_color = (225, 225, 230, 255)
             hub_color = (130, 130, 135, 255)
+            prop_img = _draw_propeller(self._propeller_angle, blade_color, hub_color)
             
-        prop_img = _draw_propeller(self._propeller_angle, blade_color, hub_color)
         base_img.paste(prop_img, (0, 0), mask=prop_img)
         return base_img
+
 
 
 
@@ -379,8 +405,8 @@ class HAMinderApp:
         while True:
             with self._lock:
                 if not self._fan_on:
-                    # Snap back to horizontal rest position
-                    self._propeller_angle = 0.0
+                    # Snap back to 45 degrees rest position
+                    self._propeller_angle = 45.0
                     break
                 # 20 degrees per 100ms creates a smooth, energetic spin
                 self._propeller_angle = (self._propeller_angle + 20) % 360
