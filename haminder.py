@@ -5,7 +5,8 @@ import threading
 import subprocess
 import requests
 import urllib3
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
+
 import pystray
 
 # Optional .env file support — no error if python-dotenv isn't installed
@@ -165,6 +166,40 @@ def _make_icon(lit: bool) -> Image.Image:
     return img
 
 
+def _make_emoji_icon(emoji: str) -> Image.Image:
+    """
+    Generate a transparent 64x64 RGBA icon with a centered emoji
+    using the Apple Color Emoji font.
+    """
+    size = _ICON_SIZE
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    font_path = "/System/Library/Fonts/Apple Color Emoji.ttc"
+    try:
+        font = ImageFont.truetype(font_path, 40)
+    except Exception:
+        font = ImageFont.load_default()
+        
+    try:
+        bbox = draw.textbbox((0, 0), emoji, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+    except AttributeError:
+        w, h = draw.textsize(emoji, font=font)
+        
+    x = (size - w) / 2
+    y = (size - h) / 2 - 4
+    
+    try:
+        draw.text((x, y), emoji, font=font, embedded_color=True)
+    except TypeError:
+        draw.text((x, y), emoji, font=font)
+        
+    return img
+
+
+
 class SleepWakeObserver(NSObject):
     def initWithApp_(self, app):
         self = objc.super(SleepWakeObserver, self).init()
@@ -203,9 +238,7 @@ class SleepWakeObserver(NSObject):
 
         if was_fan_on:
             self._was_fan_on_before_sleep = True
-            with self._app._lock:
-                self._app._fan_on = False
-            self._app.icon.update_menu()
+            self._app._set_fan_state(False)
             # Synchronously turn off the fan so the request completes before sleep
             self._app.toggle_device(HA_FAN_ENTITY, False)
         else:
@@ -233,7 +266,7 @@ class HAMinderApp:
             'Content-Type':  'application/json',
         }
 
-        menu = pystray.Menu(
+        light_menu = pystray.Menu(
             pystray.MenuItem(
                 'Light On',
                 self.start_minder,
@@ -245,6 +278,17 @@ class HAMinderApp:
                 enabled=lambda item: self._light_on,
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem('Quit', self.quit_app),
+        )
+
+        self.icon = pystray.Icon(
+            name='HA-Minder-Light',
+            icon=_make_icon(False),
+            title='HA-Minder Light',
+            menu=light_menu,
+        )
+
+        fan_menu = pystray.Menu(
             pystray.MenuItem(
                 'Fan On',
                 self.turn_fan_on,
@@ -259,15 +303,15 @@ class HAMinderApp:
             pystray.MenuItem('Quit', self.quit_app),
         )
 
-
-        self.icon = pystray.Icon(
-            name='HA-Minder',
-            icon=_make_icon(False),
-            title='HA-Minder',
-            menu=menu,
+        self.fan_icon = pystray.Icon(
+            name='HA-Minder-Fan',
+            icon=_make_emoji_icon('🪭'),
+            title='HA-Minder Fan',
+            menu=fan_menu,
         )
 
         self._observer = SleepWakeObserver.alloc().initWithApp_(self)
+
 
     # ------------------------------------------------------------------
     # UI state helpers
@@ -279,6 +323,14 @@ class HAMinderApp:
             self._light_on = lit
         self.icon.icon = _make_icon(lit)
         self.icon.update_menu()
+
+    def _set_fan_state(self, on: bool) -> None:
+        """Update fan icon emoji and menu enabled-states atomically."""
+        with self._lock:
+            self._fan_on = on
+        emoji = '🌀' if on else '🪭'
+        self.fan_icon.icon = _make_emoji_icon(emoji)
+        self.fan_icon.update_menu()
 
     # ------------------------------------------------------------------
     # Menu callbacks
@@ -297,25 +349,24 @@ class HAMinderApp:
         ).start()
 
     def turn_fan_on(self, icon=None, item=None) -> None:
-        with self._lock:
-            self._fan_on = True
-        self.icon.update_menu()
+        self._set_fan_state(True)
         threading.Thread(
             target=self.toggle_device, args=(HA_FAN_ENTITY, True), daemon=True
         ).start()
 
     def turn_fan_off(self, icon=None, item=None) -> None:
-        with self._lock:
-            self._fan_on = False
-        self.icon.update_menu()
+        self._set_fan_state(False)
         threading.Thread(
             target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
         ).start()
 
     def quit_app(self, icon=None, item=None) -> None:
-        """Turn light off synchronously, then stop the tray icon."""
+        """Turn light and fan off synchronously, then stop both tray icons."""
         self.toggle_indicator(False)
+        self.toggle_device(HA_FAN_ENTITY, False)
         self.icon.stop()
+        self.fan_icon.stop()
+
 
 
     # ------------------------------------------------------------------
@@ -345,11 +396,19 @@ class HAMinderApp:
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        # Ensure light starts off, then hand control to the tray event loop
+        # Ensure light and fan start off, then hand control to the tray event loop
         threading.Thread(
             target=self.toggle_indicator, args=(False,), daemon=True
         ).start()
+        threading.Thread(
+            target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
+        ).start()
+        
+        # Start the fan icon on a background thread
+        threading.Thread(target=self.fan_icon.run, daemon=True).start()
+        # Primary light icon occupies the main Cocoa event loop
         self.icon.run()
+
 
 
 if __name__ == '__main__':
