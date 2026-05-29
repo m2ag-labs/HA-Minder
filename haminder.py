@@ -171,6 +171,7 @@ class SleepWakeObserver(NSObject):
         if self:
             self._app = app
             self._was_on_before_sleep = False
+            self._was_fan_on_before_sleep = False
             
             nc = NSWorkspace.sharedWorkspace().notificationCenter()
             nc.addObserver_selector_name_object_(
@@ -190,6 +191,7 @@ class SleepWakeObserver(NSObject):
     def receiveSleepNotification_(self, notification):
         with self._app._lock:
             was_on = self._app._light_on
+            was_fan_on = self._app._fan_on
         
         if was_on:
             self._was_on_before_sleep = True
@@ -199,10 +201,25 @@ class SleepWakeObserver(NSObject):
         else:
             self._was_on_before_sleep = False
 
+        if was_fan_on:
+            self._was_fan_on_before_sleep = True
+            with self._app._lock:
+                self._app._fan_on = False
+            self._app.icon.update_menu()
+            # Synchronously turn off the fan so the request completes before sleep
+            self._app.toggle_device(HA_FAN_ENTITY, False)
+        else:
+            self._was_fan_on_before_sleep = False
+
     def receiveWakeNotification_(self, notification):
         if self._was_on_before_sleep:
             self._app.start_minder()
             self._was_on_before_sleep = False
+
+        if self._was_fan_on_before_sleep:
+            self._app.turn_fan_on()
+            self._was_fan_on_before_sleep = False
+
 
 
 class HAMinderApp:
