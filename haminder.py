@@ -596,6 +596,44 @@ class HAMinderApp:
                 else:
                     self._trigger_at_desk_mode()
 
+    def _poll_device_states(self) -> None:
+        """Periodically poll Home Assistant states to reflect external/manual changes."""
+        while True:
+            time.sleep(5.0)
+            
+            with self._lock:
+                is_away = self._away
+                
+            light_active = self.query_device_state(HA_LIGHT_ENTITY)
+            fan_active = self.query_device_state(HA_FAN_ENTITY)
+            
+            with self._lock:
+                if is_away:
+                    # Update our history so it restores to the correct external state on plug-in!
+                    self._was_light_on_before_away = light_active
+                    self._was_fan_on_before_away = fan_active
+                    continue
+                    
+                # Detect changes
+                light_changed = (light_active != self._light_on)
+                fan_changed = (fan_active != self._fan_on)
+                
+                if light_changed or fan_changed:
+                    print(f"External state change detected! Light: {light_active}, Fan: {fan_active}")
+                    self._light_on = light_active
+                    self._fan_on = fan_active
+                    
+                    # Manage the animation thread based on external state
+                    if fan_changed:
+                        if fan_active:
+                            # Start animation if not already running
+                            threading.Thread(target=self._animate_fan, daemon=True).start()
+                            
+            # Update UI if changes occurred while at desk
+            if not is_away and (light_changed or fan_changed):
+                self._update_ui()
+
+
 
 
 
@@ -668,11 +706,15 @@ class HAMinderApp:
         # (Allows instant 'Away' battery detection at launch)
         threading.Thread(target=self._poll_battery, daemon=True).start()
         
+        # Start the background HA state change polling thread
+        threading.Thread(target=self._poll_device_states, daemon=True).start()
+        
         # Asynchronously query current HA states and initialize UI
         threading.Thread(target=self.initialize_device_states, daemon=True).start()
         
         # Primary combined icon occupies the main Cocoa event loop
         self.icon.run()
+
 
 
 
