@@ -201,6 +201,59 @@ def _draw_propeller(
     return rotated
 
 
+def _draw_beach_scene(sway_angle_rad: float) -> Image.Image:
+    """
+    Draw a colorful, full 64x64 RGBA beach scene containing:
+      - Sky-blue background with a glowing orange sun
+      - Turquoise ocean
+      - Golden sand island dune
+      - Centered palm tree with curved trunk and palm leaves swaying dynamically
+    """
+    size = _ICON_SIZE
+    img = Image.new('RGBA', (size, size), (135, 206, 235, 255))  # Sky blue background
+    draw = ImageDraw.Draw(img)
+    
+    # 1. Sunset/Orange Sun (x=12, y=12, radius=7)
+    draw.ellipse([5, 5, 19, 19], fill=(255, 120, 0, 255))
+    
+    # 2. Turquoise/Cyan Ocean (y=36 to y=52)
+    draw.rectangle([0, 36, 64, 52], fill=(32, 178, 170, 255))
+    
+    # 3. Golden Sand Island (drawn at bottom)
+    draw.ellipse([-10, 48, 74, 75], fill=(238, 214, 175, 255))
+    
+    # 4. Swaying Palm Tree (Trunk base at (40, 52), height ~24 pixels)
+    sway_offset = 6 * math.sin(sway_angle_rad)
+    trunk_top_x = 40 + sway_offset
+    trunk_top_y = 28
+    
+    # Draw curved trunk using quadratic Bezier interpolation
+    steps = 10
+    for i in range(steps + 1):
+        t = i / steps
+        bx = (1 - t)**2 * 40 + 2 * (1 - t) * t * (43 + sway_offset/2) + t**2 * trunk_top_x
+        by = (1 - t)**2 * 52 + 2 * (1 - t) * t * 40 + t**2 * trunk_top_y
+        r_trunk = 2.2 - 0.7 * t  # trunk tapers at top
+        draw.ellipse([bx - r_trunk, by - r_trunk, bx + r_trunk, by + r_trunk], fill=(120, 75, 45, 255))
+        
+    # 5. Swaying Palm Leaves (curving outward from trunk top)
+    leaf_color = (34, 139, 34, 255)
+    leaf_angles = [-160, -120, -80, -40, 0]
+    for angle_deg in leaf_angles:
+        rad = math.radians(angle_deg + sway_offset * 1.5)
+        leaf_steps = 8
+        for j in range(1, leaf_steps + 1):
+            lt = j / leaf_steps
+            # Leaves curve downward under gravity
+            lx = trunk_top_x + 12 * lt * math.cos(rad)
+            ly = trunk_top_y + 12 * lt * math.sin(rad) + 4 * lt**2
+            r_leaf = 1.8 * (1 - 0.7 * lt)
+            draw.ellipse([lx - r_leaf, ly - r_leaf, lx + r_leaf, ly + r_leaf], fill=leaf_color)
+            
+    return img
+
+
+
 
 
 
@@ -265,6 +318,10 @@ class HAMinderApp:
         self._light_on = False
         self._fan_on   = False
         self._propeller_angle = 45.0
+        self._away     = False
+        self._sway_time = 0.0
+        self._was_light_on_before_away = False
+        self._was_fan_on_before_away = False
         self._lock     = threading.Lock()
 
 
@@ -278,27 +335,28 @@ class HAMinderApp:
             pystray.MenuItem(
                 'Light On',
                 self.start_minder,
-                enabled=lambda item: not self._light_on,
+                enabled=lambda item: not self._light_on and not self._away,
             ),
             pystray.MenuItem(
                 'Light Off',
                 self.stop_minder,
-                enabled=lambda item: self._light_on,
+                enabled=lambda item: self._light_on and not self._away,
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 'Fan On',
                 self.turn_fan_on,
-                enabled=lambda item: not self._fan_on,
+                enabled=lambda item: not self._fan_on and not self._away,
             ),
             pystray.MenuItem(
                 'Fan Off',
                 self.turn_fan_off,
-                enabled=lambda item: self._fan_on,
+                enabled=lambda item: self._fan_on and not self._away,
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem('Quit', self.quit_app),
         )
+
 
         self.icon = pystray.Icon(
             name='HA-Minder',
@@ -318,10 +376,12 @@ class HAMinderApp:
     def _make_combined_icon(self) -> Image.Image:
         """
         Generate a perfectly square 64×64 RGBA tray icon containing:
-          - Full-size Moon/Sun status (Light)
-          - Centered, superimposed 2-blade propeller at the current rotation angle (Fan)
-        This ensures the icons are the largest size allowable.
+          - If Away: swaying palm tree beach scene
+          - If At Desk: Moon/Sun status (Light) with superimposed propeller (Fan)
         """
+        if self._away:
+            return _draw_beach_scene(self._sway_time)
+            
         base_img = _make_icon(self._light_on)
         
         if self._light_on:
@@ -361,6 +421,7 @@ class HAMinderApp:
             
         base_img.paste(prop_img, (0, 0), mask=prop_img)
         return base_img
+
 
 
 
@@ -432,10 +493,91 @@ class HAMinderApp:
 
     def quit_app(self, icon=None, item=None) -> None:
         """Turn light and fan off synchronously, then stop the tray icon."""
+        with self._lock:
+            self._away = False
         self._set_fan_state(False)
         self.toggle_indicator(False)
         self.toggle_device(HA_FAN_ENTITY, False)
         self.icon.stop()
+
+    def _animate_away(self) -> None:
+        """Animate the swaying palm tree beach scene while the user is away."""
+        while True:
+            with self._lock:
+                if not self._away:
+                    break
+                self._sway_time += 0.2  # Speed of the sway
+                
+            self.icon.icon = self._make_combined_icon()
+            time.sleep(0.1)
+        
+        # Redraw standard icon on return
+        self._update_ui()
+
+    def _trigger_away_mode(self) -> None:
+        print("Transitioning to AWAY mode (Unplugged)")
+        with self._lock:
+            # 1. Save states
+            self._was_light_on_before_away = self._light_on
+            self._was_fan_on_before_away = self._fan_on
+            # 2. Turn off flags locally
+            self._light_on = False
+            self._fan_on = False
+            self._away = True
+            self._sway_time = 0.0
+            
+        # 3. Synchronously turn off HA devices so they shut down instantly
+        self.toggle_indicator(False)
+        self.toggle_device(HA_FAN_ENTITY, False)
+        
+        # 4. Start swaying animation background thread
+        threading.Thread(target=self._animate_away, daemon=True).start()
+
+    def _trigger_at_desk_mode(self) -> None:
+        print("Transitioning to AT DESK mode (Plugged In)")
+        with self._lock:
+            self._away = False
+            
+        # 1. Redraw combined icon
+        self._update_ui()
+        
+        # 2. Restore light state
+        if getattr(self, '_was_light_on_before_away', False):
+            self.start_minder()
+            
+        # 3. Restore fan state
+        if getattr(self, '_was_fan_on_before_away', False):
+            self.turn_fan_on()
+
+    def _poll_battery(self) -> None:
+        """Periodically check the power source and coordinate desk transition automations."""
+        last_was_battery = False
+        
+        # Determine initial battery state to avoid redundant triggering on startup
+        try:
+            res = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True)
+            last_was_battery = "Battery Power" in res.stdout
+            if last_was_battery:
+                # If we start on battery, trigger away mode immediately
+                self._trigger_away_mode()
+        except Exception:
+            pass
+            
+        while True:
+            time.sleep(5.0)
+            try:
+                res = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True)
+                current_is_battery = "Battery Power" in res.stdout
+            except Exception:
+                continue
+                
+            if current_is_battery != last_was_battery:
+                last_was_battery = current_is_battery
+                if current_is_battery:
+                    self._trigger_away_mode()
+                else:
+                    self._trigger_at_desk_mode()
+
 
 
 
@@ -476,8 +618,12 @@ class HAMinderApp:
             target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
         ).start()
         
+        # Start the background battery polling thread
+        threading.Thread(target=self._poll_battery, daemon=True).start()
+        
         # Primary combined icon occupies the main Cocoa event loop
         self.icon.run()
+
 
 
 
