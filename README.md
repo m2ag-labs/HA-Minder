@@ -9,10 +9,10 @@ A premium, lightweight macOS menu bar application that controls a [Home Assistan
 HA-Minder uses a robust loading system to locate your credentials. If you are comfortable with the command line, you can configure your settings in **under 2 minutes**.
 
 ### 1. Where to Place Your Configuration File
-On startup, HA-Minder searches for a configuration file named `.env` or `env.sh` in the following directory hierarchy (stopping at the first file found):
+On startup, HA-Minder searches for a configuration file named `.env`, `env.sh`, `env`, or `.haminder.env` in the following directory hierarchy (stopping at the first file found):
 1. **Current Working Directory** (where you run the script or where the compiled app bundle resides)
-2. **User Home Directory** (`~/.env` or `~/.haminder.env`)
-3. **User Config Folder** (`~/.config/haminder/env` or `~/.config/haminder/.env`)
+2. **User Home Directory** (e.g., `~/.env`, `~/.haminder.env`, `~/env`, `~/env.sh`)
+3. **User Config Folder** (`~/.config/haminder/env`, `~/.config/haminder/.env`, `~/.config/haminder/env.sh`)
 4. **Parent Directories** recursively upwards to system root.
 
 > [!TIP]
