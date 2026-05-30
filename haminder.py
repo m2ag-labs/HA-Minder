@@ -330,6 +330,20 @@ class SleepWakeObserver(NSObject):
             self._was_fan_on_before_sleep = False
 
 
+if sys.platform == 'darwin':
+    class HAMinderMenuDelegate(NSObject):
+        def initWithApp_(self, app):
+            self = objc.super(HAMinderMenuDelegate, self).init()
+            if self:
+                self._app = app
+            return self
+
+        def menuWillOpen_(self, menu):
+            self._app.handle_menu_opened()
+
+        def menuDidClose_(self, menu):
+            self._app.handle_menu_closed()
+
 
 class HAMinderApp:
     def __init__(self):
@@ -341,6 +355,9 @@ class HAMinderApp:
         self._was_light_on_before_away = False
         self._was_fan_on_before_away = False
         self._lock     = threading.Lock()
+
+        self._menu_active = False
+        self._last_control_time = 0.0
 
 
 
@@ -382,6 +399,23 @@ class HAMinderApp:
             title='HA-Minder',
             menu=menu,
         )
+
+        if sys.platform == 'darwin':
+            self._menu_delegate = HAMinderMenuDelegate.alloc().initWithApp_(self)
+            
+            # Wrap _update_menu to inject our custom delegate
+            original_update_menu = self.icon._update_menu
+            def wrapped_update_menu():
+                original_update_menu()
+                nsmenu = self.icon._status_item.menu()
+                if nsmenu:
+                    nsmenu.setDelegate_(self._menu_delegate)
+            self.icon._update_menu = wrapped_update_menu
+            
+            # Assign the delegate to the initial menu
+            nsmenu = self.icon._status_item.menu()
+            if nsmenu:
+                nsmenu.setDelegate_(self._menu_delegate)
 
         self._observer = SleepWakeObserver.alloc().initWithApp_(self)
 
@@ -463,17 +497,31 @@ class HAMinderApp:
         self._update_ui()
 
 
+    def handle_menu_opened(self) -> None:
+        print("Menu opened - pausing background poll updates.")
+        with self._lock:
+            self._menu_active = True
+
+    def handle_menu_closed(self) -> None:
+        print("Menu closed - resuming background poll updates.")
+        with self._lock:
+            self._menu_active = False
+
     # ------------------------------------------------------------------
     # Menu callbacks
     # ------------------------------------------------------------------
 
     def start_minder(self, icon=None, item=None) -> None:
+        with self._lock:
+            self._last_control_time = time.time()
         self._set_state(True)
         threading.Thread(
             target=self.toggle_indicator, args=(True,), daemon=True
         ).start()
 
     def stop_minder(self, icon=None, item=None) -> None:
+        with self._lock:
+            self._last_control_time = time.time()
         self._set_state(False)
         threading.Thread(
             target=self.toggle_indicator, args=(False,), daemon=True
@@ -497,6 +545,8 @@ class HAMinderApp:
         self.icon.icon = self._make_combined_icon()
 
     def turn_fan_on(self, icon=None, item=None) -> None:
+        with self._lock:
+            self._last_control_time = time.time()
         self._set_fan_state(True)
         threading.Thread(target=self._animate_fan, daemon=True).start()
         threading.Thread(
@@ -504,6 +554,8 @@ class HAMinderApp:
         ).start()
 
     def turn_fan_off(self, icon=None, item=None) -> None:
+        with self._lock:
+            self._last_control_time = time.time()
         self._set_fan_state(False)
         threading.Thread(
             target=self.toggle_device, args=(HA_FAN_ENTITY, False), daemon=True
@@ -603,12 +655,22 @@ class HAMinderApp:
             
             with self._lock:
                 is_away = self._away
+                menu_active = self._menu_active
+                in_grace_period = (time.time() - self._last_control_time) < 8.0
+                
+            if not is_away and (menu_active or in_grace_period):
+                # Skip polling while menu is open or immediately after user control
+                continue
                 
             light_active = self.query_device_state(HA_LIGHT_ENTITY)
             fan_active = self.query_device_state(HA_FAN_ENTITY)
             
             with self._lock:
-                if is_away:
+                # Re-check flags in case user interacted during the HTTP requests
+                if not self._away and (self._menu_active or (time.time() - self._last_control_time) < 8.0):
+                    continue
+                    
+                if self._away:
                     # Update our history so it restores to the correct external state on plug-in!
                     self._was_light_on_before_away = light_active
                     self._was_fan_on_before_away = fan_active
