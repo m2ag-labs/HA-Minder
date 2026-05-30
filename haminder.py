@@ -85,9 +85,9 @@ def _load_robust_config() -> None:
             seen.add(d)
             unique_dirs.append(d)
 
-    # Load from the first .env / env.sh files we find (or any of them to populate missing values)
+    # Load from the first config files we find (or any of them to populate missing values)
     for d in unique_dirs:
-        for filename in ('.env', 'env.sh'):
+        for filename in ('.env', 'env.sh', 'env', '.haminder.env'):
             filepath = os.path.join(d, filename)
             if os.path.isfile(filepath):
                 for k, v in _parse_env_file(filepath).items():
