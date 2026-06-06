@@ -175,14 +175,16 @@ stateDiagram-v2
     CheckPower --> Away: Battery Power Detected
 
     AtDesk --> Away: Unplugged (AC -> Battery)
-    note on link
+    note right of Away
+        On Unplug:
         - Saves current states
         - Shuts down HA devices
         - Starts swaying tree
     end note
     
     Away --> AtDesk: Plugged In (Battery -> AC)
-    note on link
+    note left of AtDesk
+        On Plug-in:
         - Restores saved states
         - Toggles HA devices back ON
     end note
