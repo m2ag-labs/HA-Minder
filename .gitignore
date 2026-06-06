@@ -10,3 +10,4 @@ build
 .node_repl_history
 .eggs
 env.sh
+HA-Minder.spec
