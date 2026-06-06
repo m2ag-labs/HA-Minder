@@ -1,0 +1,14 @@
+# Ignore virtual environment and cache folders to optimize token usage and search speed
+.venv/
+venv/
+__pycache__/
+.DS_Store
+
+# Ignore build and distribution packages
+dist/
+build/
+HA-Minder.spec
+
+# Ignore package manager folders
+node_modules/
+.npm/
