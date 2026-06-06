@@ -57,7 +57,7 @@ The app dynamically draws pixel-perfect menu bar icons at runtime. Below are the
 | At Desk: Light OFF, Fan OFF | At Desk: Light OFF, Fan ON (Spinning) | At Desk: Light ON, Fan OFF | At Desk: Light ON, Fan ON (Spinning) | Away From Desk: Laptop Unplugged |
 | :---: | :---: | :---: | :---: | :---: |
 | ![Moon Static](assets/unlit_static.png) | ![Moon Spinning](assets/unlit_spinning.gif) | ![Sun Static](assets/lit_static.png) | ![Sun Spinning](assets/lit_spinning.gif) | ![Away Swaying](assets/away_swaying.gif) |
-| **Crescent Moon**<br>Lavender moon core, propeller at rest. | **Breezy Night**<br>Lavender moon core, spinning silver propeller. | **Glowing Sun**<br>Golden core, glowing rays, propeller at rest. | **Breezy Day**<br>Propeller colored dark-blue inside and white outside the sun. | **Spyglass Beach Scene**<br>Swaying palm trees with dynamic sun, sand & ocean. |
+| **Crescent Moon**<br>Lavender moon core, no propeller. | **Breezy Night**<br>Lavender moon core, spinning silver propeller. | **Glowing Sun**<br>Golden core, glowing rays, no propeller. | **Breezy Day**<br>Propeller colored dark-blue inside and white outside the sun. | **Spyglass Beach Scene**<br>Swaying palm trees with dynamic sun, sand & ocean. |
 
 ---
 

@@ -331,6 +331,30 @@ class SleepWakeObserver(NSObject):
 
 
 if sys.platform == 'darwin':
+    from AppKit import NSImage
+    from Foundation import NSData
+
+    class MainThreadHelper(NSObject):
+        def initWithApp_(self, app):
+            self = objc.super(MainThreadHelper, self).init()
+            if self:
+                self._app = app
+            return self
+
+        def updateIcon_(self, ns_image):
+            if self._app.icon and getattr(self._app.icon, '_status_item', None):
+                self._app.icon._status_item.button().setImage_(ns_image)
+
+        def updateMenu_(self, dummy):
+            if self._app.icon:
+                self._app.icon.update_menu()
+
+        def updateIconAndMenu_(self, ns_image):
+            if self._app.icon and getattr(self._app.icon, '_status_item', None):
+                self._app.icon._status_item.button().setImage_(ns_image)
+            if self._app.icon:
+                self._app.icon.update_menu()
+
     class HAMinderMenuDelegate(NSObject):
         def initWithApp_(self, app):
             self = objc.super(HAMinderMenuDelegate, self).init()
@@ -355,6 +379,9 @@ class HAMinderApp:
         self._was_light_on_before_away = False
         self._was_fan_on_before_away = False
         self._lock     = threading.Lock()
+        self._pil_cache = {}
+        self._nsimage_cache = {}
+        self._init_caches()
 
         self._menu_active = False
         self._last_control_time = 0.0
@@ -395,12 +422,13 @@ class HAMinderApp:
 
         self.icon = pystray.Icon(
             name='HA-Minder',
-            icon=self._make_combined_icon(),
+            icon=self._pil_cache.get(('desk', self._light_on, self._fan_on, 45.0), self._make_combined_icon()),
             title='HA-Minder',
             menu=menu,
         )
 
         if sys.platform == 'darwin':
+            self._main_thread_helper = MainThreadHelper.alloc().initWithApp_(self)
             self._menu_delegate = HAMinderMenuDelegate.alloc().initWithApp_(self)
             
             # Wrap _update_menu to inject our custom delegate
@@ -429,13 +457,16 @@ class HAMinderApp:
         """
         Generate a perfectly square 64×64 RGBA tray icon containing:
           - If Away: swaying palm tree beach scene
-          - If At Desk: Moon/Sun status (Light) with superimposed propeller (Fan)
+          - If At Desk: Moon/Sun status (Light) with superimposed propeller (Fan) if running
         """
         if self._away:
             return _draw_beach_scene(self._sway_time)
             
         base_img = _make_icon(self._light_on)
         
+        if not self._fan_on:
+            return base_img
+            
         if self._light_on:
             # We want: 
             # - Outer/default color (extends outside Sun): white (255, 255, 255, 255)
@@ -474,15 +505,102 @@ class HAMinderApp:
         base_img.paste(prop_img, (0, 0), mask=prop_img)
         return base_img
 
+    def _pil_to_nsimage(self, pil_img: Image.Image) -> 'NSImage':
+        """Convert a PIL Image to a macOS NSImage, sized correctly for the status bar."""
+        import io
+        from Foundation import NSData
+        from AppKit import NSImage, NSStatusBar, NSSize
+        b = io.BytesIO()
+        pil_img.save(b, 'png')
+        data = NSData(b.getvalue())
+        ns_img = NSImage.alloc().initWithData_(data)
+        try:
+            thickness = NSStatusBar.systemStatusBar().thickness()
+        except Exception:
+            thickness = 22.0
+        ns_img.setSize_(NSSize(thickness, thickness))
+        return ns_img
 
+    def _init_caches(self) -> None:
+        """Pre-render and cache all animation frames as PIL Images and macOS NSImages."""
+        self._pil_cache = {}
+        self._nsimage_cache = {}
+        
+        # 1. Cache the 32 frames of the away beach scene
+        for i in range(32):
+            sway = i * 0.2
+            pil_img = _draw_beach_scene(sway)
+            self._pil_cache[('away', i)] = pil_img
+            if sys.platform == 'darwin':
+                self._nsimage_cache[('away', i)] = self._pil_to_nsimage(pil_img)
+                
+        # 2. Cache the 18 propeller rotation angles for both light and fan states
+        cached_angles = [(45 + 20 * i) % 360 for i in range(18)]
+        for angle in cached_angles:
+            for lit in (False, True):
+                for fan in (False, True):
+                    orig_away = self._away
+                    orig_light = self._light_on
+                    orig_fan = self._fan_on
+                    orig_angle = self._propeller_angle
+                    
+                    self._away = False
+                    self._light_on = lit
+                    self._fan_on = fan
+                    self._propeller_angle = float(angle)
+                    
+                    pil_img = self._make_combined_icon()
+                    self._pil_cache[('desk', lit, fan, angle)] = pil_img
+                    if sys.platform == 'darwin':
+                        self._nsimage_cache[('desk', lit, fan, angle)] = self._pil_to_nsimage(pil_img)
+                        
+                    self._away = orig_away
+                    self._light_on = orig_light
+                    self._fan_on = orig_fan
+                    self._propeller_angle = orig_angle
 
-
-
+    def _get_current_cached_image(self):
+        """Retrieve the pre-rendered image for the current state."""
+        with self._lock:
+            away = self._away
+            sway_time = self._sway_time
+            light_on = self._light_on
+            fan_on = self._fan_on
+            propeller_angle = self._propeller_angle
+            
+        if away:
+            frame_idx = int(sway_time / 0.2) % 32
+            key = ('away', frame_idx)
+        else:
+            cached_angles = [(45 + 20 * i) % 360 for i in range(18)]
+            closest_angle = min(cached_angles, key=lambda a: min(abs(a - propeller_angle), 360 - abs(a - propeller_angle)))
+            key = ('desk', light_on, fan_on, closest_angle)
+            
+        if sys.platform == 'darwin':
+            img = self._nsimage_cache.get(key)
+        else:
+            img = self._pil_cache.get(key)
+            
+        if img is None:
+            pil_img = self._make_combined_icon()
+            if sys.platform == 'darwin':
+                img = self._pil_to_nsimage(pil_img)
+                self._nsimage_cache[key] = img
+            else:
+                img = pil_img
+                self._pil_cache[key] = img
+        return img
 
     def _update_ui(self) -> None:
         """Re-draw the combined icon and refresh the menu bar status."""
-        self.icon.icon = self._make_combined_icon()
-        self.icon.update_menu()
+        if sys.platform == 'darwin':
+            ns_image = self._get_current_cached_image()
+            self._main_thread_helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "updateIconAndMenu:", ns_image, False
+            )
+        else:
+            self.icon.icon = self._get_current_cached_image()
+            self.icon.update_menu()
 
     def _set_state(self, lit: bool) -> None:
         """Update light state and refresh the combined menu bar UI."""
@@ -538,11 +656,23 @@ class HAMinderApp:
                 # 20 degrees per 100ms creates a smooth, energetic spin
                 self._propeller_angle = (self._propeller_angle + 20) % 360
             
-            self.icon.icon = self._make_combined_icon()
+            if sys.platform == 'darwin':
+                ns_image = self._get_current_cached_image()
+                self._main_thread_helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "updateIcon:", ns_image, False
+                )
+            else:
+                self.icon.icon = self._get_current_cached_image()
             time.sleep(0.1)
         
         # Ensure we redraw the icon in its static horizontal rest state
-        self.icon.icon = self._make_combined_icon()
+        if sys.platform == 'darwin':
+            ns_image = self._get_current_cached_image()
+            self._main_thread_helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "updateIcon:", ns_image, False
+            )
+        else:
+            self.icon.icon = self._get_current_cached_image()
 
     def turn_fan_on(self, icon=None, item=None) -> None:
         with self._lock:
@@ -578,7 +708,13 @@ class HAMinderApp:
                     break
                 self._sway_time += 0.2  # Speed of the sway
                 
-            self.icon.icon = self._make_combined_icon()
+            if sys.platform == 'darwin':
+                ns_image = self._get_current_cached_image()
+                self._main_thread_helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "updateIcon:", ns_image, False
+                )
+            else:
+                self.icon.icon = self._get_current_cached_image()
             time.sleep(0.1)
         
         # Redraw standard icon on return
